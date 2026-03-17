@@ -6,7 +6,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Daily Notes">
-<link rel="apple-touch-icon" href="icon.png">
 <title>Daily Notes</title>
 <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
 <style>
@@ -625,30 +624,37 @@ function closeSB(){
   document.getElementById('sbOverlay').classList.remove('show');
 }
 
-// Swipe gesture on main area
+// Swipe gesture on main area — only from left edge (first 28px) to open, anywhere to close
 (function(){
-  let tx=0,ty=0,swiping=false;
+  let tx=0,ty=0,swiping=false,edgeSwipe=false;
   const main=document.querySelector('.main');
-  main.addEventListener('touchstart',e=>{tx=e.touches[0].clientX;ty=e.touches[0].clientY;swiping=true;},{passive:true});
+  main.addEventListener('touchstart',e=>{
+    tx=e.touches[0].clientX;ty=e.touches[0].clientY;swiping=true;
+    // Only allow open-swipe from left edge zone (28px)
+    edgeSwipe=tx<28;
+  },{passive:true});
   main.addEventListener('touchmove',e=>{
     if(!swiping)return;
     const dx=e.touches[0].clientX-tx,dy=e.touches[0].clientY-ty;
-    if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>30){
-      if(dx>0&&!sbOpen)openSB();
+    // Must be strongly horizontal (3:1 ratio) and exceed 44px
+    if(Math.abs(dx)>Math.abs(dy)*3&&Math.abs(dx)>44){
+      if(dx>0&&!sbOpen&&edgeSwipe)openSB();
       else if(dx<0&&sbOpen)closeSB();
       swiping=false;
     }
   },{passive:true});
-  main.addEventListener('touchend',()=>{swiping=false;},{passive:true});
+  main.addEventListener('touchend',()=>{swiping=false;edgeSwipe=false;},{passive:true});
 
-  // Also swipe-close on sidebar
+  // Swipe-close on sidebar itself
   const sb=document.getElementById('sidebar');
-  let sbTx=0;
-  sb.addEventListener('touchstart',e=>{sbTx=e.touches[0].clientX;},{passive:true});
+  let sbTx=0,sbSwiping=false;
+  sb.addEventListener('touchstart',e=>{sbTx=e.touches[0].clientX;sbSwiping=true;},{passive:true});
   sb.addEventListener('touchmove',e=>{
+    if(!sbSwiping)return;
     const dx=e.touches[0].clientX-sbTx;
-    if(dx<-40)closeSB();
+    if(dx<-50)closeSB();
   },{passive:true});
+  sb.addEventListener('touchend',()=>{sbSwiping=false;},{passive:true});
 })();
 
 // ═══════════════════════════════════════════
@@ -829,10 +835,35 @@ function goToday(){openDay(TODAY);}
 function renderDay(){
   const ds=curDate;
   if(!ds){document.getElementById('dv').innerHTML=`<div style="padding:60px 0;text-align:center;color:var(--faint);font-style:italic">Select a day from the calendar.<br><br><span style="font-size:.75rem;font-family:'DM Mono',monospace">Tap ☰ to open calendar</span></div>`;updateWC();return;}
+
+  // Pre-fill Trinity for new days
+  if(!isPrev) initDayNote(ds);
+
   const isToday=ds===TODAY,text=notes[ds]||'',g=grat[ds]||['','',''],m=mood[ds]||0,photo=photos[ds]||null;
   const prev=fd(addD(pd(ds),-1)),next=fd(addD(pd(ds),1)),futNext=pd(next)>new Date()&&next!==TODAY;
   const v=getV(ds);
   const isSpecial=!!special[ds];
+
+  // This day last year
+  const ly=getLastYear(ds);
+  let lyHTML='';
+  if(ly){
+    const preview=ly.text.replace(/^Glory to the Holy Trinity!\n+/,'').trim().substring(0,160);
+    lyHTML=`<div style="background:var(--card);border:1px solid var(--faint);border-left:3px solid var(--muted);border-radius:7px;padding:11px 14px;margin-bottom:16px;cursor:pointer" onclick="openDay('${ly.ds}')">
+      <div style="font-family:'DM Mono',monospace;font-size:.52rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px">✦ This day last year</div>
+      <div style="font-size:calc(var(--fs)*.88);color:var(--muted);font-style:italic;line-height:1.65">${esc(preview)}${ly.text.length>160?'…':''}</div>
+    </div>`;
+  }
+
+  // Anniversary reminders
+  const anniversaries=getAnniversaries();
+  let annHTML='';
+  if(anniversaries.length&&isToday){
+    annHTML=`<div style="background:rgba(240,192,96,.1);border:1px solid var(--special);border-radius:7px;padding:11px 14px;margin-bottom:16px">
+      <div style="font-family:'DM Mono',monospace;font-size:.52rem;color:var(--special);letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px">✨ Special anniversary</div>
+      ${anniversaries.map(a=>`<div style="font-size:calc(var(--fs)*.88);color:var(--ink);line-height:1.65">${fl(a.ds)} — ${a.age} year${a.age===1?'':'s'} ago <span style="cursor:pointer;text-decoration:underline;color:var(--accent)" onclick="openDay('${a.ds}')">view</span></div>`).join('')}
+    </div>`;
+  }
 
   let photoHTML='';
   if(!isPrev){
@@ -852,9 +883,11 @@ function renderDay(){
   const moodHTML=`<div class="moodrow"><span class="moodlbl">Mood</span>${moods.map((e,i)=>`<button class="moodbtn ${m===i+1?'sel':''}" data-m="${i+1}" onclick="setMood(${i+1})">${e}</button>`).join('')}</div>`;
 
   const spBadge=isSpecial?`<span style="font-size:.8rem;margin-left:4px" title="Special day">✨</span>`:'';
+  // Re-read text after potential pre-fill
+  const currentText=notes[ds]||'';
   let main='';
-  if(isPrev)main=text.trim()?`<div class="pvw">${renderMD(text)}</div>`:`<div style="color:var(--faint);font-style:italic;font-size:calc(var(--fs)*.9)">Nothing written yet.</div>`;
-  else main=`<textarea class="nta" id="mta" data-date="${ds}" placeholder="${isToday?'What\'s on your mind…':'Write about this day…'}" spellcheck="true">${esc(text)}</textarea>`;
+  if(isPrev)main=currentText.trim()?`<div class="pvw">${renderMD(currentText)}</div>`:`<div style="color:var(--faint);font-style:italic;font-size:calc(var(--fs)*.9)">Nothing written yet.</div>`;
+  else main=`<textarea class="nta" id="mta" data-date="${ds}" placeholder="${isToday?'What\'s on your mind…':'Write about this day…'}" spellcheck="true">${esc(currentText)}</textarea>`;
 
   document.getElementById('dv').innerHTML=`
     <div class="dnav">
@@ -866,13 +899,23 @@ function renderDay(){
     <div class="dtitle ${isToday?'tod':''}">${dl(ds)}${isToday?' · Today':''}${spBadge}</div>
     <div class="dsub">${fl(ds)}</div>
     <div class="verse"><div class="vt">"${esc(v.t)}"</div><div class="vr">${esc(v.r)}</div></div>
+    ${annHTML}${lyHTML}
     ${moodHTML}${photoHTML}
     <div class="slbl">Note</div>
     ${main}${gratHTML}`;
 
   if(!isPrev){
     const ta=document.getElementById('mta');
-    if(ta){autoR(ta);ta.addEventListener('input',()=>{autoR(ta);schedSave(ta);});ta.addEventListener('keydown',onKD);ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);}
+    if(ta){
+      autoR(ta);
+      ta.addEventListener('input',()=>{autoR(ta);schedSave(ta);});
+      ta.addEventListener('keydown',onKD);
+      ta.addEventListener('mouseup',_trackSel);
+      ta.addEventListener('keyup',_trackSel);
+      ta.addEventListener('touchend',()=>setTimeout(_trackSel,50));
+      ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);
+      _lastSel={start:ta.value.length,end:ta.value.length};
+    }
   }
   updateWC();
 }
@@ -921,7 +964,32 @@ function togPreview(){const ta=document.getElementById('mta');if(ta&&curDate)not
 // ═══════════════════════════════════════════
 // FORMAT
 // ═══════════════════════════════════════════
-function fmt(type){if(isPrev)return;const ta=document.getElementById('mta');if(!ta)return;const s=ta.selectionStart,e=ta.selectionEnd,sel=ta.value.substring(s,e),bef=ta.value.substring(0,s),aft=ta.value.substring(e);switch(type){case 'bold':ta.value=bef+`**${sel||'bold text'}**`+aft;ta.selectionStart=s+(sel?0:2);ta.selectionEnd=s+(sel?sel.length+4:11);break;case 'italic':ta.value=bef+`*${sel||'italic text'}*`+aft;ta.selectionStart=s+(sel?0:1);ta.selectionEnd=s+(sel?sel.length+2:12);break;case 'h1':ipfx(ta,'# ');break;case 'h2':ipfx(ta,'## ');break;case 'h3':ipfx(ta,'### ');break;case 'ul':ipfx(ta,'- ');break;case 'ol':ipfx(ta,'1. ');break;case 'task':ipfx(ta,'- [ ] ');break;case 'quote':ipfx(ta,'> ');break;case 'hr':{const nl=bef.endsWith('\n')||bef===''?'':'\n';ta.value=bef+nl+'\n---\n\n'+aft;ta.selectionStart=ta.selectionEnd=s+nl.length+6;break;}}ta.dispatchEvent(new Event('input'));ta.focus();autoR(ta);}
+// Store last known selection so toolbar works even after focus loss on mobile
+let _lastSel={start:0,end:0};
+function _trackSel(){const ta=document.getElementById('mta');if(ta){_lastSel={start:ta.selectionStart,end:ta.selectionEnd};}}
+
+function fmt(type){
+  if(isPrev)return;
+  const ta=document.getElementById('mta');if(!ta)return;
+  // Restore focus first, then use stored selection if current one is collapsed from tap
+  ta.focus();
+  // Use stored selection if live selection is empty and we have a stored one
+  const liveS=ta.selectionStart,liveE=ta.selectionEnd;
+  const s=(liveS===liveE&&_lastSel.end>_lastSel.start)?_lastSel.start:liveS;
+  const e=(liveS===liveE&&_lastSel.end>_lastSel.start)?_lastSel.end:liveE;
+  ta.setSelectionRange(s,e);
+  const sel=ta.value.substring(s,e),bef=ta.value.substring(0,s),aft=ta.value.substring(e);
+  switch(type){
+    case 'bold':ta.value=bef+`**${sel||'bold text'}**`+aft;ta.selectionStart=s+(sel?0:2);ta.selectionEnd=s+(sel?sel.length+4:11);break;
+    case 'italic':ta.value=bef+`*${sel||'italic text'}*`+aft;ta.selectionStart=s+(sel?0:1);ta.selectionEnd=s+(sel?sel.length+2:12);break;
+    case 'h1':ipfx(ta,'# ');break;case 'h2':ipfx(ta,'## ');break;case 'h3':ipfx(ta,'### ');break;
+    case 'ul':ipfx(ta,'- ');break;case 'ol':ipfx(ta,'1. ');break;case 'task':ipfx(ta,'- [ ] ');break;
+    case 'quote':ipfx(ta,'> ');break;
+    case 'hr':{const nl=bef.endsWith('\n')||bef===''?'':'\n';ta.value=bef+nl+'\n---\n\n'+aft;ta.selectionStart=ta.selectionEnd=s+nl.length+6;break;}
+  }
+  ta.dispatchEvent(new Event('input'));ta.focus();autoR(ta);
+  _lastSel={start:ta.selectionStart,end:ta.selectionEnd};
+}
 function ipfx(ta,pfx){const s=ta.selectionStart,bef=ta.value.substring(0,s),aft=ta.value.substring(s),ls=bef.lastIndexOf('\n')+1,lc=bef.substring(ls);if(lc.startsWith(pfx)){ta.value=bef.substring(0,ls)+lc.substring(pfx.length)+aft;ta.selectionStart=ta.selectionEnd=s-pfx.length;}else{ta.value=bef.substring(0,ls)+pfx+lc+aft;ta.selectionStart=ta.selectionEnd=s+pfx.length;}}
 function onKD(e){const ta=e.target;if(e.key==='Tab'){e.preventDefault();const s=ta.selectionStart;ta.value=ta.value.substring(0,s)+'  '+ta.value.substring(ta.selectionEnd);ta.selectionStart=ta.selectionEnd=s+2;ta.dispatchEvent(new Event('input'));return;}if(e.key==='Enter'){const s=ta.selectionStart,bef=ta.value.substring(0,s),ls=bef.lastIndexOf('\n')+1,line=bef.substring(ls);const ul=line.match(/^(\s*)(- \[[ x]\] |- )/),ol=line.match(/^(\s*)(\d+)\. /);if(ul){e.preventDefault();if(line===ul[0]){ta.value=ta.value.substring(0,ls)+'\n'+ta.value.substring(s);ta.selectionStart=ta.selectionEnd=ls+1;}else{const ins='\n'+ul[1]+(ul[2].includes('[ ]')||ul[2].includes('[x]')?'- [ ] ':'- ');ta.value=bef+ins+ta.value.substring(s);ta.selectionStart=ta.selectionEnd=s+ins.length;}ta.dispatchEvent(new Event('input'));autoR(ta);}else if(ol){e.preventDefault();const ins='\n'+ol[1]+(parseInt(ol[2])+1)+'. ';ta.value=bef+ins+ta.value.substring(s);ta.selectionStart=ta.selectionEnd=s+ins.length;ta.dispatchEvent(new Event('input'));autoR(ta);}}}
 
@@ -1016,6 +1084,99 @@ function showToast(msg){const t=document.getElementById('toast');t.textContent=m
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(qcOpen)closeQC();if(searchOpen)closeSearch();if(sbOpen)closeSB();}});
 
 // ═══════════════════════════════════════════
+// TRINITY PRE-FILL
+// ═══════════════════════════════════════════
+const TRINITY='Glory to the Holy Trinity!';
+function initDayNote(ds){
+  // Only pre-fill if the note is completely empty (new day)
+  if(!notes[ds]){
+    notes[ds]=TRINITY+'\n\n';
+    sn();
+  }
+}
+
+// ═══════════════════════════════════════════
+// THIS DAY LAST YEAR
+// ═══════════════════════════════════════════
+function getLastYear(ds){
+  const d=pd(ds);
+  const lyDs=`${d.getFullYear()-1}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return notes[lyDs]?{ds:lyDs,text:notes[lyDs]}:null;
+}
+
+// ═══════════════════════════════════════════
+// ANNIVERSARY REMINDERS (special days recurring)
+// ═══════════════════════════════════════════
+function getAnniversaries(){
+  // Find special days from any past year that match today's month/day
+  const todayMD=TODAY.substring(5); // MM-DD
+  return Object.keys(special).filter(ds=>{
+    const age=parseInt(TODAY.substring(0,4))-parseInt(ds.substring(0,4));
+    return ds.substring(5)===todayMD&&age>0;
+  }).map(ds=>({ds,age:parseInt(TODAY.substring(0,4))-parseInt(ds.substring(0,4))}));
+}
+
+// ═══════════════════════════════════════════
+// YEARLY REVIEW
+// ═══════════════════════════════════════════
+function showYearlyReview(){
+  const year=new Date().getFullYear()-1; // last full year
+  const entries=Object.entries(notes).filter(([ds])=>ds.startsWith(year+''));
+  if(!entries.length){showToast(`No entries found for ${year}`);return;}
+  const totalWords=entries.reduce((a,[,v])=>a+wc(v),0);
+  const daysWritten=entries.length;
+  const longestEntry=entries.reduce((a,b)=>wc(b[1])>wc(a[1])?b:a);
+  const specialDays=Object.keys(special).filter(ds=>ds.startsWith(year+'')).length;
+  // Find most written month
+  const byMonth={};entries.forEach(([ds,v])=>{const m=ds.substring(0,7);byMonth[m]=(byMonth[m]||0)+wc(v);});
+  const bestMonth=Object.entries(byMonth).sort((a,b)=>b[1]-a[1])[0];
+  const bm=bestMonth?pd(bestMonth[0]+'-01').toLocaleDateString('en-AU',{month:'long'}):'—';
+
+  const html=`
+    <div style="padding:28px 0;max-width:560px;margin:0 auto">
+      <div style="font-family:'DM Mono',monospace;font-size:.56rem;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin-bottom:16px">${year} in review</div>
+      <div style="font-size:calc(var(--fs)*1.3);font-weight:500;margin-bottom:24px;color:var(--ink)">A year of showing up.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
+        ${[
+          ['📅','Days written',daysWritten],
+          ['✍️','Total words',totalWords.toLocaleString()],
+          ['✨','Special days',specialDays],
+          ['🔥','Best month',bm],
+        ].map(([e,l,v])=>`<div style="background:var(--card);border:1px solid var(--faint);border-radius:8px;padding:14px">
+          <div style="font-size:1.2rem;margin-bottom:5px">${e}</div>
+          <div style="font-family:'DM Mono',monospace;font-size:.52rem;color:var(--muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em">${l}</div>
+          <div style="font-size:calc(var(--fs)*1.05);font-weight:500">${v}</div>
+        </div>`).join('')}
+      </div>
+      <div style="font-family:'DM Mono',monospace;font-size:.54rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px">Most written day</div>
+      <div style="background:var(--card);border:1px solid var(--faint);border-left:3px solid var(--accent);border-radius:8px;padding:14px;cursor:pointer" onclick="openDay('${longestEntry[0]}')">
+        <div style="font-family:'DM Mono',monospace;font-size:.58rem;color:var(--accent);margin-bottom:6px">${fl(longestEntry[0])} · ${wc(longestEntry[1])} words</div>
+        <div style="font-size:calc(var(--fs)*.88);color:var(--muted);font-style:italic;line-height:1.65">${esc(longestEntry[1].substring(0,180))}${longestEntry[1].length>180?'…':''}</div>
+      </div>
+      <div style="margin-top:24px;font-size:calc(var(--fs)*.88);color:var(--muted);font-style:italic;line-height:1.7;text-align:center">
+        "${daysWritten} days you chose to show up.<br>Glory to the Holy Trinity."
+      </div>
+    </div>`;
+
+  document.getElementById('dv').innerHTML=`
+    <div class="dnav">
+      <button class="backbtn" onclick="renderDay()"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 1L3 5l4 4"/></svg>Back</button>
+    </div>
+    ${html}`;
+}
+
+// Yearly review button in sidebar footer
+(function(){
+  const bkbar=document.querySelector('.bkbar');
+  if(bkbar){
+    const yr=document.createElement('button');
+    yr.className='bkbtn';yr.style.borderColor='var(--accent)';yr.style.color='var(--accent)';
+    yr.innerHTML='✦ Year';yr.onclick=()=>{goTab('notes');setTimeout(showYearlyReview,80);};
+    bkbar.appendChild(yr);
+  }
+})();
+
+// ═══════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════
 load();
@@ -1023,8 +1184,8 @@ renderAllCal();
 renderDL();updateDLBadge();
 updatePPBadge();
 const dlDI=document.getElementById('dldat');if(dlDI){const t=new Date();t.setDate(t.getDate()+7);dlDI.value=fd(t);}
-// Start on notes panel, show calendar prompt
-renderDay();
+// Open directly to today
+openDay(TODAY);
 </script>
 </body>
 </html>
